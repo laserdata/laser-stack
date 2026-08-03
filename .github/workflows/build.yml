@@ -1,0 +1,246 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_NAMESPACE: laserdatainc
+
+jobs:
+  scripts:
+    name: Scripts ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate scripts
+        shell: bash
+        run: |
+          for file in \
+            scripts/_common \
+            scripts/up \
+            scripts/down \
+            scripts/logs \
+            scripts/reset \
+            scripts/smoke; do
+            bash -n "${file}"
+          done
+          ./scripts/up --help >/dev/null
+          ./scripts/reset --help >/dev/null
+          node --check scripts/smoke.mjs
+          cp .env.example .env
+          LASER_IGGY_PASSWORD=process-value
+          export LASER_IGGY_PASSWORD
+          source scripts/_common
+          [[ "$(env_value LASER_IGGY_PASSWORD)" == "process-value" ]]
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs:
+      - scripts
+    env:
+      CI: "true"
+      LASER_IGGY_PASSWORD: laser-stack-ci-password
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          sed -i \
+            "s/^LASER_IGGY_PASSWORD=.*/LASER_IGGY_PASSWORD=${LASER_IGGY_PASSWORD}/" \
+            .env
+
+      - name: Validate files
+        run: |
+          mapfile -t shell_files < <(
+            find scripts -type f ! -name '*.py' ! -name '*.mjs'
+            find images -type f -name healthcheck
+          )
+          shellcheck "${shell_files[@]}"
+          docker compose --env-file .env config --quiet
+
+      - name: Build and start
+        run: ./scripts/up --build
+
+      - name: Managed smoke
+        timeout-minutes: 10
+        run: ./scripts/smoke
+
+      - name: Verify image platform
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -a
+          source .env
+          set +a
+          expected_platform="linux/${ARCH}"
+          for image in "${LASER_IGGY_IMAGE}" "${LASER_PLANE_IMAGE}"; do
+            actual_platform="$(
+              docker image inspect \
+                --format '{{.Os}}/{{.Architecture}}' \
+                "${image}"
+            )"
+            if [[ "${actual_platform}" != "${expected_platform}" ]]; then
+              echo "${image} has platform ${actual_platform}, expected ${expected_platform}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check Docker Hub credentials
+        if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          [[ -n "${DOCKERHUB_USERNAME}" ]] || {
+            echo "DOCKERHUB_USERNAME is not configured" >&2
+            exit 1
+          }
+          [[ -n "${DOCKERHUB_TOKEN}" ]] || {
+            echo "DOCKERHUB_TOKEN is not configured" >&2
+            exit 1
+          }
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push architecture images
+        if: github.event_name != 'pull_request'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          source scripts/_common
+          set -a
+          source .env
+          set +a
+          docker tag "${LASER_IGGY_IMAGE}" \
+            "docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:latest-${ARCH}"
+          docker tag "${LASER_PLANE_IMAGE}" \
+            "docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:latest-${ARCH}"
+          retry docker push \
+            "docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:latest-${ARCH}"
+          retry docker push \
+            "docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:latest-${ARCH}"
+
+      - name: Print logs
+        if: failure()
+        run: docker compose --env-file .env logs --no-color || true
+
+      - name: Clean up
+        if: always()
+        run: ./scripts/reset --yes || true
+
+  publish-manifests:
+    name: Publish multi-arch manifests
+    if: github.event_name != 'pull_request'
+    needs:
+      - build
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Publish and sign manifests
+        run: |
+          source scripts/_common
+          for image in iggy-server laser-plane; do
+            retry docker buildx imagetools create \
+              --tag "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest" \
+              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest-amd64" \
+              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest-arm64"
+            manifest="$(
+              retry docker buildx imagetools inspect \
+                --raw \
+                "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest"
+            )"
+            platforms="$(
+              jq -r \
+                '.manifests[].platform | "\(.os)/\(.architecture)"' \
+                <<<"${manifest}" |
+                sort -u
+            )"
+            expected_platforms="$(printf '%s\n' linux/amd64 linux/arm64)"
+            if [[ "${platforms}" != "${expected_platforms}" ]]; then
+              echo "unexpected platforms in ${image}:latest" >&2
+              printf 'expected:\n%s\nactual:\n%s\n' \
+                "${expected_platforms}" \
+                "${platforms}" >&2
+              exit 1
+            fi
+            digest="$(
+              retry docker buildx imagetools inspect \
+                --format '{{.Manifest.Digest}}' \
+                "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest"
+            )"
+            retry cosign sign --yes "docker.io/${DOCKERHUB_NAMESPACE}/${image}@${digest}"
+            echo "${image} latest ${digest}" >> image-digests.txt
+          done
+          cat image-digests.txt
+
+      - name: Upload image digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests
+          path: image-digests.txt
+
+      - name: Verify anonymous pulls
+        run: |
+          source scripts/_common
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "${anonymous_config}"' EXIT
+          for image in iggy-server laser-plane; do
+            # Retried: a freshly created manifest can lag anonymous reads.
+            if ! retry env DOCKER_CONFIG="${anonymous_config}" docker buildx imagetools inspect \
+              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest" >/dev/null; then
+              echo "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest is not public" >&2
+              exit 1
+            fi
+          done

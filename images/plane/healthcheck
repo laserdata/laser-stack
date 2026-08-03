@@ -1,0 +1,36 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+
+# Drive the authenticated Iggy capability path first. That request makes Iggy
+# execute AGDX_BACKEND_HELLO over the shared UDS, which is the readiness fact the
+# plane cannot establish by probing itself.
+iggy_http="${LD_PLANE_IGGY_HTTP_URL:-http://iggy:3000}"
+username="${LD_PLANE_IGGY_USERNAME:-iggy}"
+password="${LD_PLANE_IGGY_PASSWORD:?LD_PLANE_IGGY_PASSWORD is required}"
+username_json="$(printf '%s' "${username}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+password_json="$(printf '%s' "${password}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+login="$(curl --fail --silent --show-error --max-time 2 \
+    -H 'content-type: application/json' \
+    --data "{\"username\":\"${username_json}\",\"password\":\"${password_json}\"}" \
+    "${iggy_http}/users/login")"
+token="$(printf '%s' "${login}" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+[ -n "${token}" ] || {
+    printf 'Iggy login did not return an access token\n' >&2
+    exit 1
+}
+logout() {
+    curl --silent --max-time 2 -X DELETE \
+        -H "Authorization: Bearer ${token}" \
+        "${iggy_http}/users/logout" >/dev/null || true
+}
+trap logout EXIT
+capabilities="$(curl --fail --silent --show-error --max-time 2 \
+    -H "Authorization: Bearer ${token}" \
+    "${iggy_http}/agdx/capabilities")"
+printf '%s' "${capabilities}" | grep -Eq '"managed"[[:space:]]*:[[:space:]]*true'
+
+# /ready now proves UDS bind, the backend hello above, Iggy connectivity, and
+# recovered mutation folds.
+curl --fail --silent --show-error --max-time 2 \
+    http://127.0.0.1:8089/ready >/dev/null

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common
+source "${SCRIPT_DIR}/_common"
+
+volumes=false
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/down [--volumes]
+
+  --volumes  Delete the stack's named volumes with its containers and network.
+EOF
+}
+
+while (($#)); do
+    case "$1" in
+        --volumes) volumes=true ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+
+require_docker
+ensure_env
+
+if "${volumes}"; then
+    compose down --volumes --remove-orphans
+else
+    compose down --remove-orphans
+fi

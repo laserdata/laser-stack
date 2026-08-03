@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common
+source "${SCRIPT_DIR}/_common"
+
+build=false
+foreground=false
+random_password=false
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/up [--build] [--foreground] [--random-password]
+
+  --build            Build thin images from signed R2 binaries.
+  --foreground       Run attached and stop the stack with Ctrl-C.
+  --random-password  Generate random credentials for a new data volume.
+EOF
+}
+
+while (($#)); do
+    case "$1" in
+        --build) build=true ;;
+        --foreground) foreground=true ;;
+        --random-password) random_password=true ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+
+require_docker
+if "${random_password}"; then
+    if docker volume inspect laser-stack_iggy-data >/dev/null 2>&1; then
+        die "existing Iggy data uses the current password. Run ./scripts/reset --yes first"
+    fi
+    random_env_password
+else
+    ensure_env
+fi
+
+print_connection() {
+    local username
+    local password
+    local bind_address
+    local port
+
+    if in_ci; then
+        return
+    fi
+
+    username="$(env_value LASER_IGGY_USERNAME iggy)"
+    password="$(env_value LASER_IGGY_PASSWORD)"
+    bind_address="$(env_value LASER_BIND_ADDRESS 127.0.0.1)"
+    port="$(env_value LASER_IGGY_PORT 8090)"
+    [[ "${bind_address}" == "0.0.0.0" ]] && bind_address="127.0.0.1"
+    printf "\nexport LASER_CONNECTION_STRING='%s:%s@%s:%s'\n" \
+        "${username}" "${password}" "${bind_address}" "${port}"
+}
+
+if "${build}"; then
+    printf 'Building images from signed R2 artifacts.\n'
+    compose build --pull
+else
+    printf 'Pulling latest images.\n'
+    if ! compose pull --quiet; then
+        if images_present; then
+            printf 'Registry unavailable. Using cached images.\n'
+        else
+            printf 'Published images are unavailable. Building from signed R2 artifacts.\n'
+            compose build --pull
+        fi
+    fi
+fi
+
+if "${foreground}"; then
+    print_connection
+    printf '\nStarting Laser Stack. Press Ctrl-C to stop.\n\n'
+    compose up --no-build --remove-orphans
+else
+    compose up -d --no-build --remove-orphans
+    wait_for_stack
+    printf '\nLaser Stack is ready.\n'
+    print_connection
+fi

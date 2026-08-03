@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -Eeuo pipefail
+
+ROOT="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${ROOT}/.env"
+
+die() {
+    printf 'error: %s\n' "$*" >&2
+    exit 1
+}
+
+compose() {
+    docker compose --project-directory "${ROOT}" --env-file "${ENV_FILE}" "$@"
+}
+
+# Run a network verb up to five times with growing delays. Registry pulls and
+# pushes and npm installs fail transiently, and a whole publish run must not.
+retry() {
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if "$@"; then
+            return 0
+        fi
+        ((attempt == 5)) && break
+        printf 'attempt %s/5 failed, retrying in %ss: %s\n' \
+            "${attempt}" "$((attempt * 5))" "$*" >&2
+        sleep "$((attempt * 5))"
+    done
+    return 1
+}
+
+require_docker() {
+    command -v docker >/dev/null 2>&1 || die "Docker is not installed"
+    docker info >/dev/null 2>&1 || die "Docker Engine is not running"
+    docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
+}
+
+in_ci() {
+    [[ "${CI:-}" == "1" || "${CI:-}" == "true" ]]
+}
+
+# Match Docker Compose environment precedence.
+env_value() {
+    local name="$1"
+    local fallback="${2:-}"
+    local value
+
+    if value="$(printenv "${name}")"; then
+        printf '%s' "${value}"
+        return
+    fi
+
+    value="$(
+        awk -v name="${name}" '
+            index($0, name "=") == 1 { value = substr($0, length(name) + 2) }
+            END { print value }
+        ' "${ENV_FILE}"
+    )"
+    value="${value%$'\r'}"
+    if [[ ${#value} -ge 2 ]]; then
+        if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]] ||
+            [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+    fi
+    printf '%s' "${value:-${fallback}}"
+}
+
+generate_password() {
+    od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+write_env_password() {
+    local password
+    local source
+    password="$1"
+    source="${ENV_FILE}"
+    [[ -f "${source}" ]] || source="${ROOT}/.env.example"
+
+    (
+        umask 077
+        temporary="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+        trap 'rm -f "${temporary}"' EXIT
+        awk -v password="${password}" '
+            /^LASER_IGGY_PASSWORD=/ {
+                print "LASER_IGGY_PASSWORD=" password
+                next
+            }
+            { print }
+        ' "${source}" >"${temporary}"
+        mv "${temporary}" "${ENV_FILE}"
+        trap - EXIT
+    )
+    chmod 600 "${ENV_FILE}"
+}
+
+ensure_env() {
+    if [[ ! -f "${ENV_FILE}" ]]; then
+        write_env_password laser
+        printf 'Created %s with local credentials.\n' "${ENV_FILE}"
+    fi
+
+    chmod 600 "${ENV_FILE}"
+    validate_env
+}
+
+random_env_password() {
+    if printenv LASER_IGGY_PASSWORD >/dev/null 2>&1; then
+        die "unset LASER_IGGY_PASSWORD before generating a random password"
+    fi
+    write_env_password "$(generate_password)"
+    validate_env
+    printf 'Generated a random local password.\n'
+}
+
+validate_env() {
+    local username
+    local password
+    local port
+    local cpu
+    local timeout
+
+    username="$(env_value LASER_IGGY_USERNAME iggy)"
+    password="$(env_value LASER_IGGY_PASSWORD)"
+    cpu="$(env_value LASER_IGGY_CPU skylake)"
+
+    [[ "${username}" =~ ^[A-Za-z0-9._~-]+$ ]] ||
+        die "LASER_IGGY_USERNAME contains unsupported characters"
+    [[ -n "${password}" && "${password}" != "change-me" ]] ||
+        die "set a non-default LASER_IGGY_PASSWORD in .env"
+    [[ "${password}" =~ ^[A-Za-z0-9._~-]+$ ]] ||
+        die "LASER_IGGY_PASSWORD must use only letters, digits, '.', '_', '~', or '-'"
+    for port in \
+        "$(env_value LASER_IGGY_PORT 8090)" \
+        "$(env_value LASER_IGGY_HTTP_PORT 3000)"; do
+        if [[ ! "${port}" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+            die "stack ports must be between 1 and 65535"
+        fi
+    done
+    [[ "${cpu}" =~ ^(skylake|icelake|sapphirerapids|znver3)$ ]] ||
+        die "LASER_IGGY_CPU must be one of: skylake, icelake, sapphirerapids, or znver3"
+
+    for timeout in \
+        "$(env_value LASER_START_TIMEOUT 120)" \
+        "$(env_value LASER_SMOKE_TIMEOUT 300)"; do
+        if [[ ! "${timeout}" =~ ^[0-9]+$ ]] || ((timeout < 1)); then
+            die "stack timeouts must be positive integers"
+        fi
+    done
+}
+
+diagnostics() {
+    printf '\nStack state:\n' >&2
+    compose ps >&2 || true
+    printf '\nRecent Iggy logs:\n' >&2
+    compose logs --no-color --tail 100 iggy >&2 || true
+    printf '\nRecent plane logs:\n' >&2
+    compose logs --no-color --tail 100 plane >&2 || true
+}
+
+images_present() {
+    local image
+
+    for image in \
+        "$(env_value LASER_IGGY_IMAGE docker.io/laserdatainc/iggy-server:latest)" \
+        "$(env_value LASER_PLANE_IMAGE docker.io/laserdatainc/laser-plane:latest)"; do
+        docker image inspect "${image}" >/dev/null 2>&1 || return 1
+    done
+}
+
+wait_for_stack() {
+    local timeout
+    local deadline
+    local service
+    local container_id
+    local status
+
+    timeout="$(env_value LASER_START_TIMEOUT 120)"
+
+    for service in iggy plane; do
+        deadline=$((SECONDS + timeout))
+        status=""
+        while ((SECONDS < deadline)); do
+            container_id="$(compose ps -q "${service}")"
+            if [[ -z "${container_id}" ]]; then
+                sleep 1
+                continue
+            fi
+            status="$(
+                docker inspect \
+                    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                    "${container_id}"
+            )"
+            case "${status}" in
+                healthy)
+                    printf '%s is healthy.\n' "${service}"
+                    break
+                    ;;
+                exited | dead)
+                    diagnostics
+                    die "${service} stopped before becoming healthy"
+                    ;;
+            esac
+            sleep 1
+        done
+
+        [[ "${status:-}" == "healthy" ]] || {
+            diagnostics
+            die "${service} did not become healthy within ${timeout}s"
+        }
+    done
+}

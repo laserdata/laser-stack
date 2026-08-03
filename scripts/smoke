@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common
+source "${SCRIPT_DIR}/_common"
+
+require_docker
+ensure_env
+
+iggy_id="$(compose ps -q iggy)"
+plane_id="$(compose ps -q plane)"
+[[ -n "${iggy_id}" && -n "${plane_id}" ]] ||
+    die "the stack is not running. Run ./scripts/up first"
+
+if ! docker exec "${iggy_id}" /usr/local/bin/iggy-healthcheck; then
+    diagnostics
+    die "Iggy TCP health check failed"
+fi
+printf 'Iggy TCP check passed.\n'
+
+if ! docker exec "${plane_id}" /usr/local/bin/plane-healthcheck >/dev/null; then
+    diagnostics
+    die "plane /ready check failed"
+fi
+printf 'Plane readiness check passed.\n'
+
+# The real proof: a public SDK executes the AGDX hello and a managed KV
+# set/get through Iggy, the UDS sidecar, and laser-plane. Container health
+# alone can be green while that exact path is broken.
+username="$(env_value LASER_IGGY_USERNAME iggy)"
+password="$(env_value LASER_IGGY_PASSWORD)"
+port="$(env_value LASER_IGGY_PORT 8090)"
+sdk_version="$(env_value LASER_SDK_VERSION 0.0.1)"
+sdk_spec="${LASER_SMOKE_SDK_SPEC:-@laserdata/laser-sdk@${sdk_version}}"
+timeout="$(env_value LASER_SMOKE_TIMEOUT 300)"
+node_image="$(
+    env_value LASER_SMOKE_NODE_IMAGE \
+        'node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32'
+)"
+container_name="laser-stack-smoke-$$"
+declare -a sdk_mount=()
+if [[ -f "${sdk_spec}" ]]; then
+    sdk_file="$(CDPATH='' cd -- "$(dirname -- "${sdk_spec}")" && pwd)/$(basename -- "${sdk_spec}")"
+    sdk_mount=(-v "${sdk_file}:/smoke/laser-sdk.tgz:ro")
+    sdk_spec=/smoke/laser-sdk.tgz
+fi
+
+if [[ "$(uname -s)" == "Linux" ]]; then
+    declare -a network_args=(--network host)
+    host="127.0.0.1"
+else
+    declare -a network_args=()
+    host="host.docker.internal"
+fi
+
+cleanup_smoke() {
+    docker rm -f "${container_name}" >/dev/null 2>&1 || true
+}
+
+abort_smoke() {
+    cleanup_smoke
+    exit 130
+}
+
+trap cleanup_smoke EXIT
+trap abort_smoke INT TERM
+retry docker pull --quiet "${node_image}" >/dev/null ||
+    die "could not pull the smoke runtime image"
+docker run --rm \
+    --name "${container_name}" \
+    "${network_args[@]}" \
+    "${sdk_mount[@]}" \
+    -v "${SCRIPT_DIR}/smoke.mjs:/smoke/smoke.mjs:ro" \
+    -e LASER_CONNECTION_STRING="${username}:${password}@${host}:${port}" \
+    -e LASER_SMOKE_SDK_SPEC="${sdk_spec}" \
+    "${node_image}" \
+    sh -ec '
+        mkdir -p /tmp/smoke
+        cp /smoke/smoke.mjs /tmp/smoke/
+        cd /tmp/smoke
+        for attempt in 1 2 3; do
+            if npm install --no-fund --no-audit --loglevel error \
+                "${LASER_SMOKE_SDK_SPEC}" >/dev/null; then
+                break
+            fi
+            [ "${attempt}" = 3 ] && exit 1
+            echo "npm install attempt ${attempt}/3 failed, retrying" >&2
+            sleep $((attempt * 5))
+        done
+        node smoke.mjs
+    ' &
+smoke_pid=$!
+deadline=$((SECONDS + timeout))
+while kill -0 "${smoke_pid}" >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+        cleanup_smoke
+        wait "${smoke_pid}" >/dev/null 2>&1 || true
+        diagnostics
+        die "the managed SDK smoke timed out after ${timeout}s"
+    fi
+    sleep 1
+done
+if ! wait "${smoke_pid}"; then
+    diagnostics
+    die "the managed SDK smoke failed"
+fi
+cleanup_smoke
+trap - EXIT INT TERM
+printf 'Managed SDK smoke passed.\n'
+printf 'Laser Stack smoke test passed.\n'

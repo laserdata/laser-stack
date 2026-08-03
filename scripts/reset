@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common
+source "${SCRIPT_DIR}/_common"
+
+yes=false
+
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/reset [--yes]
+
+Stops the stack and deletes only this project's three named volumes.
+EOF
+}
+
+while (($#)); do
+    case "$1" in
+        --yes) yes=true ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+
+require_docker
+ensure_env
+
+if ! "${yes}"; then
+    if in_ci || [[ ! -t 0 ]]; then
+        die "no interactive terminal. Pass --yes to confirm data deletion"
+    fi
+    read -r -p "Delete all Laser Stack local data? [y/N] " answer
+    [[ "${answer}" =~ ^[Yy]$ ]] || exit 0
+fi
+
+compose down -v --remove-orphans
