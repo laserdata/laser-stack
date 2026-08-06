@@ -32,7 +32,7 @@ printf 'Plane readiness check passed.\n'
 username="$(env_value LASER_IGGY_USERNAME iggy)"
 password="$(env_value LASER_IGGY_PASSWORD)"
 port="$(env_value LASER_IGGY_PORT 8090)"
-sdk_version="$(env_value LASER_SDK_VERSION 0.0.1)"
+sdk_version="$(env_value LASER_SDK_VERSION 0.1.0)"
 sdk_spec="${LASER_SMOKE_SDK_SPEC:-@laserdata/laser-sdk@${sdk_version}}"
 timeout="$(env_value LASER_SMOKE_TIMEOUT 300)"
 node_image="$(

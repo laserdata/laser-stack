@@ -9,7 +9,7 @@ services:
       context: ./images
       dockerfile: iggy/Dockerfile
       args:
-        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.8.102-ld}
+        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.8.104-ld}
         IGGY_CPU: ${LASER_IGGY_CPU:-skylake}
     restart: unless-stopped
     init: true
@@ -49,7 +49,7 @@ services:
       context: ./images
       dockerfile: plane/Dockerfile
       args:
-        PLANE_VERSION: ${LASER_PLANE_VERSION:-0.12.0}
+        PLANE_VERSION: ${LASER_PLANE_VERSION:-0.14.0}
     restart: unless-stopped
     init: true
     depends_on:
