@@ -50,6 +50,7 @@ services:
       dockerfile: plane/Dockerfile
       args:
         PLANE_VERSION: ${LASER_PLANE_VERSION:-0.14.0}
+        IGGY_CPU: ${LASER_IGGY_CPU:-skylake}
     restart: unless-stopped
     init: true
     depends_on:
