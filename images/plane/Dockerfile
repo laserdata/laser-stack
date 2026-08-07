@@ -6,6 +6,7 @@ ARG BASE_IMAGE=debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2
 FROM ${BASE_IMAGE} AS fetch
 
 ARG PLANE_VERSION
+ARG IGGY_CPU=skylake
 ARG TARGETARCH
 
 COPY minisign.pub /tmp/minisign.pub
@@ -16,7 +17,14 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl minisign; \
     rm -rf /var/lib/apt/lists/*; \
     case "${TARGETARCH}" in \
-        amd64|arm64) artifact="plane-linux-${TARGETARCH}" ;; \
+        amd64) \
+            case "${IGGY_CPU}" in \
+                skylake|icelake|sapphirerapids|znver3) ;; \
+                *) echo "unsupported IGGY_CPU: ${IGGY_CPU}" >&2; exit 1 ;; \
+            esac; \
+            artifact="plane-linux-amd64-${IGGY_CPU}" \
+            ;; \
+        arm64) artifact="plane-linux-arm64" ;; \
         *) echo "unsupported target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     url="https://artifacts.laserdata.com/plane/${PLANE_VERSION}/${artifact}"; \
@@ -51,4 +59,3 @@ USER 10001:10001
 WORKDIR /
 
 ENTRYPOINT ["/usr/local/bin/plane"]
-
