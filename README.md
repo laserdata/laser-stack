@@ -1,4 +1,4 @@
-# LaserData / Laser Stack
+# LaserData - Laser Stack
 
 Laser Stack runs one Apache Iggy server and one LaserData plane for local development, SDK examples, and CI.
 
