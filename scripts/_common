@@ -95,12 +95,47 @@ write_env_password() {
     chmod 600 "${ENV_FILE}"
 }
 
+ensure_plane_internal_api_token() {
+    local token
+
+    if printenv LASER_PLANE_INTERNAL_API_TOKEN >/dev/null 2>&1; then
+        return
+    fi
+    token="$(env_value LASER_PLANE_INTERNAL_API_TOKEN)"
+    [[ -n "${token}" ]] && return
+
+    token="$(generate_password)"
+    (
+        umask 077
+        temporary="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+        trap 'rm -f "${temporary}"' EXIT
+        awk -v token="${token}" '
+            /^LASER_PLANE_INTERNAL_API_TOKEN=/ {
+                print "LASER_PLANE_INTERNAL_API_TOKEN=" token
+                found = 1
+                next
+            }
+            { print }
+            END {
+                if (!found) {
+                    print "LASER_PLANE_INTERNAL_API_TOKEN=" token
+                }
+            }
+        ' "${ENV_FILE}" >"${temporary}"
+        mv "${temporary}" "${ENV_FILE}"
+        trap - EXIT
+    )
+    chmod 600 "${ENV_FILE}"
+    printf 'Added a Plane internal API token to %s.\n' "${ENV_FILE}"
+}
+
 ensure_env() {
     if [[ ! -f "${ENV_FILE}" ]]; then
         write_env_password laser
         printf 'Created %s with local credentials.\n' "${ENV_FILE}"
     fi
 
+    ensure_plane_internal_api_token
     chmod 600 "${ENV_FILE}"
     validate_env
 }
@@ -110,6 +145,7 @@ random_env_password() {
         die "unset LASER_IGGY_PASSWORD before generating a random password"
     fi
     write_env_password "$(generate_password)"
+    ensure_plane_internal_api_token
     validate_env
     printf 'Generated a random local password.\n'
 }
@@ -117,12 +153,14 @@ random_env_password() {
 validate_env() {
     local username
     local password
+    local plane_internal_api_token
     local port
     local cpu
     local timeout
 
     username="$(env_value LASER_IGGY_USERNAME iggy)"
     password="$(env_value LASER_IGGY_PASSWORD)"
+    plane_internal_api_token="$(env_value LASER_PLANE_INTERNAL_API_TOKEN)"
     cpu="$(env_value LASER_IGGY_CPU skylake)"
 
     [[ "${username}" =~ ^[A-Za-z0-9._~-]+$ ]] ||
@@ -131,6 +169,10 @@ validate_env() {
         die "set a non-default LASER_IGGY_PASSWORD in .env"
     [[ "${password}" =~ ^[A-Za-z0-9._~-]+$ ]] ||
         die "LASER_IGGY_PASSWORD must use only letters, digits, '.', '_', '~', or '-'"
+    [[ -n "${plane_internal_api_token}" && "${plane_internal_api_token}" != "change-me" ]] ||
+        die "set a non-default LASER_PLANE_INTERNAL_API_TOKEN in .env"
+    [[ "${plane_internal_api_token}" =~ ^[A-Za-z0-9._~-]+$ ]] ||
+        die "LASER_PLANE_INTERNAL_API_TOKEN must use only letters, digits, '.', '_', '~', or '-'"
     for port in \
         "$(env_value LASER_IGGY_PORT 8090)" \
         "$(env_value LASER_IGGY_HTTP_PORT 3000)"; do
