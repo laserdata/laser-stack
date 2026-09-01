@@ -9,7 +9,7 @@ services:
       context: ./images
       dockerfile: iggy/Dockerfile
       args:
-        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.8.110-ld}
+        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.8.111-ld}
         IGGY_CPU: ${LASER_IGGY_CPU:-skylake}
     restart: unless-stopped
     init: true
@@ -21,6 +21,7 @@ services:
       IGGY_ROOT_USERNAME: ${LASER_IGGY_USERNAME:-iggy}
       IGGY_ROOT_PASSWORD: ${LASER_IGGY_PASSWORD:?set LASER_IGGY_PASSWORD in .env}
       IGGY_TCP_ADDRESS: 0.0.0.0:8090
+      IGGY_NODE_ADVERTISED_ADDRESS: iggy
       IGGY_HTTP_ADDRESS: 0.0.0.0:3000
       IGGY_QUIC_ENABLED: "false"
       IGGY_WEBSOCKET_ENABLED: "false"
