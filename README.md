@@ -69,8 +69,6 @@ Examples: [Rust](https://github.com/laserdata/laser-sdk/tree/main/examples/rust)
 
 Run `./scripts/smoke` to verify Iggy health, plane readiness, and the managed path end to end. The published TypeScript SDK executes the AGDX hello and a managed KV set/get through Iggy, the UDS sidecar, and laser-plane.
 
-VSR is unconditional. No stack or connection-string protocol flag is needed.
-
 ## Services
 
 | Service | Address | Volume |
