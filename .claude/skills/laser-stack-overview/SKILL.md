@@ -9,7 +9,7 @@ description: Operational map for Laser Stack. Load for changes to Compose, Docke
 
 Laser Stack runs Apache Iggy with the LaserData plane for local SDK development and CI. This repository packages signed binaries into Docker images. It does not build either component from source.
 
-The public SDK surface is exercised through Rust, Python, and TypeScript in the sibling `laser-sdk` repository. VSR framing is unconditional and has no stack configuration flag.
+The public SDK surface is exercised through Rust, Python, and TypeScript in the sibling `laser-sdk` repository.
 
 ## Runtime
 
