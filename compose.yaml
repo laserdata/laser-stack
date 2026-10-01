@@ -9,7 +9,7 @@ services:
       context: ./images
       dockerfile: iggy/Dockerfile
       args:
-        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.9.0-ld}
+        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.9.1-ld}
         IGGY_CPU: ${LASER_IGGY_CPU:-skylake}
     restart: unless-stopped
     init: true
