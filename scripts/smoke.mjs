@@ -22,6 +22,9 @@ try {
   const opsStream = capabilities.topology?.opsStream ?? "(default)"
   console.log(`AGDX hello passed: managed backend ready, ops stream ${opsStream}`)
 
+  // KV names are scoped to the client's stream, and the server only accepts
+  // them once that stream exists.
+  await laser.stream("laser-smoke").ensure()
   const kv = laser.kv("laser-smoke")
   const key = new TextEncoder().encode(`smoke-${String(Date.now())}`)
   await kv.set(key).bytes(new TextEncoder().encode("ok")).send()

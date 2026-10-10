@@ -37,7 +37,7 @@ Host ports bind to loopback by default. The plane has no host port.
 
 `./scripts/up --build` always rebuilds from signed artifacts and waits for both services to become healthy.
 
-`./scripts/smoke` checks Iggy TCP, plane readiness, AGDX capability negotiation, and a managed KV set/get through the published TypeScript SDK.
+`./scripts/smoke` checks Iggy TCP, plane readiness, AGDX capability negotiation, and a managed KV set/get on the `laser-smoke` stream through the published TypeScript SDK. KV names are stream scoped, so the smoke creates that stream first.
 
 `./scripts/down` stops containers and preserves data. `./scripts/reset --yes` removes only this stack's containers, network, and named volumes. It does not delete images.
 
