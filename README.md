@@ -67,7 +67,7 @@ npm run example:kv
 
 Examples: [Rust](https://github.com/laserdata/laser-sdk/tree/main/examples/rust), [Python](https://github.com/laserdata/laser-sdk/tree/main/examples/python), [TypeScript](https://github.com/laserdata/laser-sdk/tree/main/examples/typescript).
 
-Run `./scripts/smoke` to verify Iggy health, plane readiness, and the managed path end to end. The published TypeScript SDK executes the AGDX hello and a managed KV set/get through Iggy, the UDS sidecar, and laser-plane.
+Run `./scripts/smoke` to verify Iggy health, plane readiness, and the managed path end to end. The published TypeScript SDK executes the AGDX hello, creates the `laser-smoke` stream if it is missing, and runs a managed KV set/get on it through Iggy, the UDS sidecar, and laser-plane.
 
 ## Services
 
