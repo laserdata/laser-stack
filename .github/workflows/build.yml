@@ -91,6 +91,20 @@ jobs:
           shellcheck "${shell_files[@]}"
           docker compose --env-file .env config --quiet
 
+      # The plane refuses a volume whose filesystem disables write barriers,
+      # and the hosted runner disk under Docker's data root is mounted `nobarrier`.
+      - name: Enable write barriers for Docker volumes
+        run: |
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          mount_point="$(findmnt --noheadings --output TARGET --target "${docker_root}")"
+          sudo mount -o remount,barrier "${mount_point}"
+          options="$(findmnt --noheadings --output OPTIONS --target "${docker_root}")"
+          echo "${mount_point}: ${options}"
+          if [[ ",${options}," == *,nobarrier,* || ",${options}," == *,barrier=0,* ]]; then
+            echo "write barriers are still disabled on ${mount_point}" >&2
+            exit 1
+          fi
+
       - name: Build and start
         run: ./scripts/up --build
 
