@@ -9,7 +9,7 @@ services:
       context: ./images
       dockerfile: iggy/Dockerfile
       args:
-        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.9.3-ld}
+        IGGY_VERSION: ${LASER_IGGY_VERSION:-0.9.4-ld}
         IGGY_CPU: ${LASER_IGGY_CPU:-skylake}
     restart: unless-stopped
     init: true
@@ -50,7 +50,7 @@ services:
       context: ./images
       dockerfile: plane/Dockerfile
       args:
-        PLANE_VERSION: ${LASER_PLANE_VERSION:-0.22.0}
+        PLANE_VERSION: ${LASER_PLANE_VERSION:-0.23.0}
         IGGY_CPU: ${LASER_IGGY_CPU:-skylake}
     restart: unless-stopped
     init: true
@@ -62,6 +62,7 @@ services:
       LD_PLANE_IGGY_USERNAME: ${LASER_IGGY_USERNAME:-iggy}
       LD_PLANE_IGGY_PASSWORD: ${LASER_IGGY_PASSWORD:?set LASER_IGGY_PASSWORD in .env}
       LD_PLANE_IGGY_TLS_DISABLED: "true"
+      LD_PLANE_CLUSTER_KIND: standalone
       LD_PLANE_QUERY_SOCKET: /run/laserdata/plane.sock
       LD_PLANE_DB_PATH: /var/lib/laser-plane/index.db
       LD_PLANE_HEALTH_ADDR: 127.0.0.1:8089

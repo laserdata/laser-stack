@@ -153,6 +153,7 @@ docker compose --env-file .env ps
 | Symptom | Check |
 | --- | --- |
 | Plane is unhealthy | Check plane logs and the internal `/health` (liveness) and `/ready` (managed readiness) endpoints |
+| Plane exits with "the plane volume cannot be used" | The plane needs durable local storage. Keep Docker's data root on a local disk that is not `tmpfs` or a network share, is writable, and is not mounted with `nobarrier` or `barrier=0` |
 | SDK authentication fails | Check `.env` and exported `LASER_*` values |
 | AGDX or KV times out | Confirm both services are healthy, then check plane logs |
 | A host port is occupied | Change its port in `.env` |
