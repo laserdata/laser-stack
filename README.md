@@ -106,10 +106,17 @@ Edit `.env` before startup:
 | `LASER_IGGY_USERNAME` | `iggy` | Root username |
 | `LASER_IGGY_PASSWORD` | `laser` | Root password |
 | `LASER_IGGY_CPU` | `skylake` | Iggy build optimization on amd64 |
-| `LASER_IGGY_IMAGE` | `docker.io/laserdatainc/iggy-server:latest` | Iggy runtime image |
-| `LASER_PLANE_IMAGE` | `docker.io/laserdatainc/laser-plane:latest` | Plane runtime image |
+| `LASER_IGGY_IMAGE` | `docker.io/laserdatainc/iggy-server:<channel>` | Iggy runtime image |
+| `LASER_PLANE_IMAGE` | `docker.io/laserdatainc/laser-plane:<channel>` | Plane runtime image |
 
 Most users do not need to change `LASER_IGGY_CPU`. It selects the prebuilt Iggy binary when building locally on amd64, with `skylake`, `icelake`, `sapphirerapids`, and `znver3` available. The setting is ignored on arm64.
+
+Published images carry one of two channel tags. `latest` is the stable release. `dev` is a pre-release for early testing. A new `.env` takes its channel from `.env.example`, and an existing `.env` keeps its own. Set both image variables to the same channel, for example:
+
+```dotenv
+LASER_IGGY_IMAGE=docker.io/laserdatainc/iggy-server:latest
+LASER_PLANE_IMAGE=docker.io/laserdatainc/laser-plane:latest
+```
 
 ## Security
 

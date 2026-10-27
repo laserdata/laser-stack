@@ -62,6 +62,8 @@ jobs:
       LASER_IGGY_PASSWORD: laser-stack-ci-password
     permissions:
       contents: read
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -81,6 +83,35 @@ jobs:
           sed -i \
             "s/^LASER_IGGY_PASSWORD=.*/LASER_IGGY_PASSWORD=${LASER_IGGY_PASSWORD}/" \
             .env
+
+      # The image tag in .env.example is the Docker Hub tag a push to main publishes.
+      - name: Resolve image channel
+        id: channel
+        run: |
+          set -a
+          source .env
+          set +a
+          channel="${LASER_IGGY_IMAGE##*:}"
+          case "${channel}" in
+            latest | dev) ;;
+            *)
+              echo "LASER_IGGY_IMAGE must use the latest or dev tag, got ${LASER_IGGY_IMAGE}" >&2
+              exit 1
+              ;;
+          esac
+          expected_iggy="docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:${channel}"
+          expected_plane="docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:${channel}"
+          if [[ "${LASER_IGGY_IMAGE}" != "${expected_iggy}" ||
+            "${LASER_PLANE_IMAGE}" != "${expected_plane}" ]]; then
+            printf 'expected %s and %s, got %s and %s\n' \
+              "${expected_iggy}" \
+              "${expected_plane}" \
+              "${LASER_IGGY_IMAGE}" \
+              "${LASER_PLANE_IMAGE}" >&2
+            exit 1
+          fi
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+          echo "Image channel: ${channel}"
 
       - name: Validate files
         run: |
@@ -158,19 +189,20 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           ARCH: ${{ matrix.arch }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
         run: |
           source scripts/_common
           set -a
           source .env
           set +a
           docker tag "${LASER_IGGY_IMAGE}" \
-            "docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:latest-${ARCH}"
+            "docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:${CHANNEL}-${ARCH}"
           docker tag "${LASER_PLANE_IMAGE}" \
-            "docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:latest-${ARCH}"
+            "docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:${CHANNEL}-${ARCH}"
           retry docker push \
-            "docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:latest-${ARCH}"
+            "docker.io/${DOCKERHUB_NAMESPACE}/iggy-server:${CHANNEL}-${ARCH}"
           retry docker push \
-            "docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:latest-${ARCH}"
+            "docker.io/${DOCKERHUB_NAMESPACE}/laser-plane:${CHANNEL}-${ARCH}"
 
       - name: Print logs
         if: failure()
@@ -185,6 +217,8 @@ jobs:
     if: github.event_name != 'pull_request'
     needs:
       - build
+    env:
+      CHANNEL: ${{ needs.build.outputs.channel }}
     permissions:
       contents: read
       id-token: write
@@ -207,13 +241,13 @@ jobs:
           source scripts/_common
           for image in iggy-server laser-plane; do
             retry docker buildx imagetools create \
-              --tag "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest" \
-              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest-amd64" \
-              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest-arm64"
+              --tag "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}" \
+              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}-amd64" \
+              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}-arm64"
             manifest="$(
               retry docker buildx imagetools inspect \
                 --raw \
-                "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest"
+                "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}"
             )"
             platforms="$(
               jq -r \
@@ -223,7 +257,7 @@ jobs:
             )"
             expected_platforms="$(printf '%s\n' linux/amd64 linux/arm64)"
             if [[ "${platforms}" != "${expected_platforms}" ]]; then
-              echo "unexpected platforms in ${image}:latest" >&2
+              echo "unexpected platforms in ${image}:${CHANNEL}" >&2
               printf 'expected:\n%s\nactual:\n%s\n' \
                 "${expected_platforms}" \
                 "${platforms}" >&2
@@ -232,10 +266,10 @@ jobs:
             digest="$(
               retry docker buildx imagetools inspect \
                 --format '{{.Manifest.Digest}}' \
-                "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest"
+                "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}"
             )"
             retry cosign sign --yes "docker.io/${DOCKERHUB_NAMESPACE}/${image}@${digest}"
-            echo "${image} latest ${digest}" >> image-digests.txt
+            echo "${image} ${CHANNEL} ${digest}" >> image-digests.txt
           done
           cat image-digests.txt
 
@@ -253,8 +287,8 @@ jobs:
           for image in iggy-server laser-plane; do
             # Retried: a freshly created manifest can lag anonymous reads.
             if ! retry env DOCKER_CONFIG="${anonymous_config}" docker buildx imagetools inspect \
-              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest" >/dev/null; then
-              echo "docker.io/${DOCKERHUB_NAMESPACE}/${image}:latest is not public" >&2
+              "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}" >/dev/null; then
+              echo "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL} is not public" >&2
               exit 1
             fi
           done
