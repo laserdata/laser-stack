@@ -24,16 +24,17 @@ Host ports bind to loopback by default. The plane has no host port.
 ## Invariants
 
 - Docker Hub namespace is `laserdatainc`.
-- Runtime images are `docker.io/laserdatainc/iggy-server:latest` and `docker.io/laserdatainc/laser-plane:latest`.
+- Runtime images are `docker.io/laserdatainc/iggy-server` and `docker.io/laserdatainc/laser-plane`, each published on two channel tags: `latest` for stable releases and `dev` for pre-releases.
+- The tag on `LASER_IGGY_IMAGE` and `LASER_PLANE_IMAGE` in `.env.example` selects the channel a push to `main` publishes. Both tags must match and CI rejects anything other than `latest` or `dev`. A pre-release merges with `dev`, and promoting it to stable is a change back to `latest`. Compose and script fallbacks stay on `latest`.
 - Component artifact versions belong in `.env.example` and Compose build arguments. Do not turn them into Docker tags or repeat them in README prose.
-- CI builds and tests `linux/amd64` and `linux/arm64`, then publishes one multi-platform `latest` manifest for each image.
-- Architecture staging tags are implementation details of the publish workflow. User-facing image references stay on `latest`.
+- CI builds and tests `linux/amd64` and `linux/arm64`, then publishes one multi-platform manifest for each image under the channel tag.
+- Architecture staging tags (`<channel>-amd64`, `<channel>-arm64`) are implementation details of the publish workflow. User-facing image references use a channel tag, never a version or a staging tag.
 - Every downloaded component binary must have a valid minisign signature under `images/minisign.pub` before it enters an image.
 - Do not put Docker Hub credentials or repository-secret setup in the public README.
 
 ## Commands
 
-`./scripts/up` pulls the latest images. If the registry is unavailable, it uses the local cache or builds from signed artifacts when no local images exist.
+`./scripts/up` pulls the images named in `.env`. If the registry is unavailable, it uses the local cache or builds from signed artifacts when no local images exist.
 
 `./scripts/up --build` always rebuilds from signed artifacts and waits for both services to become healthy.
 
@@ -44,14 +45,14 @@ Host ports bind to loopback by default. The plane has no host port.
 ## File map
 
 - `compose.yaml`: services, volumes, healthchecks, ports, and build arguments.
-- `.env.example`: tested artifact inputs, image references, credentials, and timeouts.
+- `.env.example`: tested artifact inputs, image references with their channel tag, credentials, and timeouts.
 - `images/iggy/Dockerfile`: architecture-specific Iggy artifact selection and signature verification.
 - `images/plane/Dockerfile`: architecture-specific plane artifact selection and signature verification.
 - `images/*/healthcheck`: container health contracts.
 - `scripts/_common`: environment parsing, validation, retries, readiness waits, and diagnostics.
 - `scripts/up`, `scripts/down`, `scripts/reset`, `scripts/logs`: lifecycle commands.
 - `scripts/smoke` and `scripts/smoke.mjs`: end-to-end managed SDK check.
-- `.github/workflows/build.yml`: native architecture builds, smoke, Docker Hub publication, multi-platform manifests, signing, and anonymous-pull verification.
+- `.github/workflows/build.yml`: channel resolution, native architecture builds, smoke, Docker Hub publication, multi-platform manifests, signing, and anonymous-pull verification.
 
 ## Verification
 
