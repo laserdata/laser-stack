@@ -249,9 +249,13 @@ jobs:
                 --raw \
                 "docker.io/${DOCKERHUB_NAMESPACE}/${image}:${CHANNEL}"
             )"
+            # Build attestations sit in the index as unknown/unknown entries.
             platforms="$(
               jq -r \
-                '.manifests[].platform | "\(.os)/\(.architecture)"' \
+                '.manifests[]
+                  | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")
+                  | .platform
+                  | "\(.os)/\(.architecture)"' \
                 <<<"${manifest}" |
                 sort -u
             )"
